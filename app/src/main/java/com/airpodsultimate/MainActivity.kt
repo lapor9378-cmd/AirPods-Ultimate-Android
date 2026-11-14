@@ -158,12 +158,12 @@ class MainActivity : ComponentActivity() {
         val modes = card()
         modes.addView(text("AIRPODS · MODOS DE ESCUCHA", 11, accent, true))
         modes.addView(text("Cancelación de ruido, Transparencia y gestos", 16, Color.WHITE, true))
-        modes.addView(text("Gestos de cabeza (asentir/negar), seguimiento de cabeza y modos ANC requieren una conexión Bluetooth AACP real. Esta versión todavía no puede enviar esos comandos; no mostraremos interruptores falsos. En Android 12 del TECNO, la ruta rootless de LibrePods no está soportada.", 13, secondary))
+        modes.addView(text("Los controles de gestos y seguimiento usan el canal AACP clásico. La compatibilidad depende del firmware de los AirPods y del Bluetooth del teléfono; si el canal no abre, la app lo indicará sin simular que funciona.", 13, secondary))
         content.addView(modes)
         content.addView(space(14))
         content.addView(buildHeadControlsCard())
         content.addView(space(18))
-        content.addView(text("Versión 0.7.1", 11, secondary))
+        content.addView(text("Versión 0.8.0", 11, secondary))
         showBattery(null)
     }
 
