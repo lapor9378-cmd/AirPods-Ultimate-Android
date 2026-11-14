@@ -18,6 +18,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.core.app.ActivityCompat
@@ -89,6 +91,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         stopScanning()
+        soundEngine?.disable()
         super.onPause()
     }
 
@@ -142,14 +145,93 @@ class MainActivity : ComponentActivity() {
         note.addView(updated)
         content.addView(note)
         content.addView(space(14))
+        content.addView(buildSoundCard())
         val modes = card()
-        modes.addView(text("CONTROLES DE SONIDO", 11, accent, true))
-        modes.addView(text("Cancelación de ruido, Transparencia y Audio espacial", 16, Color.WHITE, true))
-        modes.addView(text("No disponibles en esta compilación. Requieren implementar el canal de control AACP de LibrePods. El escaneo BLE no puede cambiar estos modos.", 13, secondary))
+        modes.addView(text("AIRPODS · MODOS DE ESCUCHA", 11, accent, true))
+        modes.addView(text("Cancelación de ruido, Transparencia y gestos", 16, Color.WHITE, true))
+        modes.addView(text("Pendientes de conexión AACP. Shizuku no sustituye el acceso al canal Bluetooth del sistema; no se mostrarán como activos hasta comprobar una conexión real.", 13, secondary))
         content.addView(modes)
         content.addView(space(18))
         content.addView(text("Versión 0.6.0", 11, secondary))
         showBattery(null)
+    }
+
+    private var soundEngine: SoundEffectsEngine? = null
+
+    private fun buildSoundCard(): LinearLayout {
+        val panel = card()
+        panel.addView(text("AUDIO · ECUALIZADOR", 11, accent, true))
+        panel.addView(text("Control de sonido", 20, Color.WHITE, true))
+        val state = text("Comprobando efectos del sistema…", 12, secondary)
+        panel.addView(state)
+        val master = Switch(this).apply {
+            text = "Procesamiento de sonido"
+            setTextColor(Color.WHITE)
+            isChecked = false
+        }
+        panel.addView(master)
+        val surround = Switch(this).apply {
+            text = "Envolvente virtual"
+            setTextColor(Color.WHITE)
+            isChecked = false
+            isEnabled = false
+        }
+        panel.addView(surround)
+        val bass = Switch(this).apply {
+            text = "Realce de graves"
+            setTextColor(Color.WHITE)
+            isChecked = false
+            isEnabled = false
+        }
+        panel.addView(bass)
+        val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        listOf("Plano", "Rock", "Vocal", "Bass").forEach { name ->
+            val b = Button(this).apply {
+                text = name
+                isAllCaps = false
+                textSize = 11f
+                setOnClickListener { soundEngine?.applyPreset(name) }
+            }
+            presets.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }
+        panel.addView(presets)
+        val frequencies = listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
+        val bars = ArrayList<SeekBar>()
+        frequencies.forEachIndexed { index, label ->
+            panel.addView(text(label, 12, secondary, true))
+            val seek = SeekBar(this).apply { max = 240; progress = 120; isEnabled = false }
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) soundEngine?.setBand(index, progress - 120)
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+            bars.add(seek)
+            panel.addView(seek)
+        }
+        master.setOnCheckedChangeListener { _, checked ->
+            if (checked) {
+                val engine = soundEngine ?: SoundEffectsEngine().also { soundEngine = it }
+                val ok = engine.enable()
+                state.text = if (ok) "Efectos activos en la salida global (si el firmware lo permite)." else "Este firmware no permite efectos globales. No se ha aplicado ningún cambio."
+                surround.isEnabled = ok && engine.hasVirtualizer
+                bass.isEnabled = ok && engine.hasBassBoost
+                bars.forEach { it.isEnabled = ok && engine.hasEqualizer }
+                if (!ok) master.isChecked = false
+            } else {
+                soundEngine?.disable()
+                state.text = "Procesamiento desactivado."
+                surround.isChecked = false
+                bass.isChecked = false
+                surround.isEnabled = false
+                bass.isEnabled = false
+                bars.forEach { it.isEnabled = false }
+            }
+        }
+        surround.setOnCheckedChangeListener { _, checked -> soundEngine?.setVirtualizer(checked) }
+        bass.setOnCheckedChangeListener { _, checked -> soundEngine?.setBassBoost(checked) }
+        return panel
     }
 
     private fun batteryCard(title: String, earbud: Boolean, index: Int): LinearLayout {
