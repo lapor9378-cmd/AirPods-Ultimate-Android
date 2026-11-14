@@ -11,6 +11,10 @@ data class AirPodsBattery(
     val rightInCase: Boolean?,
     val advertiserInCase: Boolean?,
     val lidOpen: Boolean?,
+    val paired: Boolean,
+    val connectionState: String,
+    val leftInEar: Boolean,
+    val rightInEar: Boolean,
     val rssi: Int = 0,
     val seenAt: Long = System.currentTimeMillis()
 ) {
@@ -27,9 +31,22 @@ data class AirPodsBattery(
             val podsBattery = payload[6].toInt() and 0xFF
             val flagsCase = payload[7].toInt() and 0xFF
             val lid = payload[8].toInt() and 0xFF
+            val paired = payload[2].toInt() == 1
+            val connectionState = when (payload[10].toInt() and 0xFF) {
+                0x00 -> "Desconectado"
+                0x04 -> "En espera"
+                0x05 -> "Reproduciendo música"
+                0x06 -> "En llamada"
+                0x07 -> "Llamando"
+                0x09 -> "Finalizando llamada"
+                else -> "Desconocido"
+            }
             val primaryLeft = ((status shr 5) and 1) == 1
             val thisInCase = ((status shr 6) and 1) == 1
             val isFlipped = !primaryLeft
+            val xorFactor = primaryLeft xor thisInCase
+            val leftInEar = if (xorFactor) (status and 0x08) != 0 else (status and 0x02) != 0
+            val rightInEar = if (xorFactor) (status and 0x02) != 0 else (status and 0x08) != 0
             val leftNibble = if (isFlipped) (podsBattery shr 4) and 0x0F else podsBattery and 0x0F
             val rightNibble = if (isFlipped) podsBattery and 0x0F else (podsBattery shr 4) and 0x0F
             val caseNibble = flagsCase and 0x0F
@@ -49,7 +66,11 @@ data class AirPodsBattery(
                 null,
                 null,
                 thisInCase,
-                ((lid shr 3) and 1) == 0
+                ((lid shr 3) and 1) == 0,
+                paired,
+                connectionState,
+                leftInEar,
+                rightInEar
             )
         }
     }
