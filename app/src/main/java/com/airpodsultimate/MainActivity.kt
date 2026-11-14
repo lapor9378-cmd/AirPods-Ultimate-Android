@@ -2,6 +2,8 @@ package com.airpodsultimate
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothDevice
+import android.app.AlertDialog
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -158,6 +160,8 @@ class MainActivity : ComponentActivity() {
         modes.addView(text("Cancelación de ruido, Transparencia y gestos", 16, Color.WHITE, true))
         modes.addView(text("Gestos de cabeza (asentir/negar), seguimiento de cabeza y modos ANC requieren una conexión Bluetooth AACP real. Esta versión todavía no puede enviar esos comandos; no mostraremos interruptores falsos. En Android 12 del TECNO, la ruta rootless de LibrePods no está soportada.", 13, secondary))
         content.addView(modes)
+        content.addView(space(14))
+        content.addView(buildHeadControlsCard())
         content.addView(space(18))
         content.addView(text("Versión 0.7.1", 11, secondary))
         showBattery(null)
@@ -165,6 +169,10 @@ class MainActivity : ComponentActivity() {
 
     private var soundEngine: SoundEffectsEngine? = null
     private val audioPrefs by lazy { getSharedPreferences("audio_settings", MODE_PRIVATE) }
+    private var aapClient: AapControlClient? = null
+    private lateinit var aapStatus: TextView
+    private lateinit var headGesturesSwitch: Switch
+    private lateinit var headTrackingSwitch: Switch
 
     private fun buildSoundCard(): LinearLayout {
         val panel = card()
@@ -242,6 +250,84 @@ class MainActivity : ComponentActivity() {
         surround.setOnCheckedChangeListener { _, checked -> audioPrefs.edit().putBoolean("virtualizer", checked).apply(); soundEngine?.setVirtualizer(checked) }
         bass.setOnCheckedChangeListener { _, checked -> audioPrefs.edit().putBoolean("bass", checked).apply(); soundEngine?.setBassBoost(checked) }
         return panel
+    }
+
+
+    private fun buildHeadControlsCard(): LinearLayout {
+        val panel = card()
+        panel.addView(text("AIRPODS · GESTOS Y MOVIMIENTO", 11, accent, true))
+        panel.addView(text("Controles de cabeza", 20, Color.WHITE, true))
+        aapStatus = text("Conecta tus AirPods para abrir el canal de control AACP.", 13, secondary)
+        panel.addView(aapStatus)
+        panel.addView(button("Conectar canal AirPods") { chooseAapDevice() })
+        headGesturesSwitch = Switch(this).apply {
+            text = "Gestos de cabeza (asentir / negar)"
+            setTextColor(Color.WHITE)
+            isEnabled = false
+        }
+        panel.addView(headGesturesSwitch)
+        headTrackingSwitch = Switch(this).apply {
+            text = "Seguimiento de movimiento de cabeza"
+            setTextColor(Color.WHITE)
+            isEnabled = false
+        }
+        panel.addView(headTrackingSwitch)
+        headGesturesSwitch.setOnCheckedChangeListener { _, checked ->
+            if (aapClient?.setHeadGestures(checked) != true) {
+                headGesturesSwitch.isChecked = false
+                aapStatus.text = "No se pudo enviar la configuración de gestos."
+            } else getSharedPreferences("airpods_settings", MODE_PRIVATE).edit().putBoolean("head_gestures", checked).apply()
+        }
+        headTrackingSwitch.setOnCheckedChangeListener { _, checked ->
+            if (aapClient?.setHeadTracking(checked) != true) {
+                headTrackingSwitch.isChecked = false
+                aapStatus.text = "No se pudo iniciar el flujo de sensores."
+            } else getSharedPreferences("airpods_settings", MODE_PRIVATE).edit().putBoolean("head_tracking", checked).apply()
+        }
+        return panel
+    }
+
+    @Suppress("MissingPermission")
+    private fun chooseAapDevice() {
+        try {
+            val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+            val devices = manager.adapter?.bondedDevices?.toList().orEmpty()
+            if (devices.isEmpty()) {
+                aapStatus.text = "No hay dispositivos emparejados. Empareja tus AirPods primero."
+                return
+            }
+            val labels = devices.map { (it.name ?: "Dispositivo") + " · " + it.address.takeLast(5) }.toTypedArray()
+            AlertDialog.Builder(this).setTitle("Selecciona tus AirPods")
+                .setItems(labels) { _, which -> connectAap(devices[which]) }
+                .setNegativeButton("Cancelar", null).show()
+        } catch (_: SecurityException) {
+            aapStatus.text = "Falta el permiso Bluetooth de dispositivos cercanos."
+        }
+    }
+
+    private fun connectAap(device: BluetoothDevice) {
+        aapClient?.close()
+        aapStatus.text = "Conectando al canal AACP…"
+        headGesturesSwitch.isEnabled = false
+        headTrackingSwitch.isEnabled = false
+        val client = AapControlClient()
+        aapClient = client
+        client.connect(device, { message, connected ->
+            runOnUiThread {
+                aapStatus.text = message
+                headGesturesSwitch.isEnabled = connected
+                headTrackingSwitch.isEnabled = connected
+                if (connected) {
+                    val prefs = getSharedPreferences("airpods_settings", MODE_PRIVATE)
+                    headGesturesSwitch.isChecked = prefs.getBoolean("head_gestures", false)
+                    headTrackingSwitch.isChecked = prefs.getBoolean("head_tracking", false)
+                }
+            }
+        }, { pitch, yaw, roll ->
+            runOnUiThread {
+                aapStatus.text = "Movimiento · Inclinación %.1f° · Giro %.1f° · Rotación %.1f°".format(pitch, yaw, roll)
+            }
+        })
     }
 
     private fun batteryCard(title: String, earbud: Boolean, index: Int): LinearLayout {
