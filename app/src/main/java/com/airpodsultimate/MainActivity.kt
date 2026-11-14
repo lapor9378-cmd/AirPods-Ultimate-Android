@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var leftPosition: TextView
     private lateinit var rightPosition: TextView
     private lateinit var caseStatus: TextView
+    private lateinit var advertiserStatus: TextView
+    private lateinit var lidStatus: TextView
     private lateinit var updated: TextView
     private lateinit var scanButton: Button
 
@@ -108,6 +110,10 @@ class MainActivity : ComponentActivity() {
         statusCard.addView(text("ESTADO DE CONEXIÓN", 11, accent, true))
         scanStatus = text("Preparando Bluetooth…", 14, Color.WHITE)
         statusCard.addView(scanStatus)
+        advertiserStatus = text("Anuncio del AirPod: esperando datos…", 13, secondary)
+        lidStatus = text("Tapa del estuche: sin datos", 13, secondary)
+        statusCard.addView(advertiserStatus)
+        statusCard.addView(lidStatus)
         scanButton = button("Buscar AirPods") { requestScanPermissions() }
         statusCard.addView(scanButton)
         content.addView(statusCard)
@@ -123,14 +129,20 @@ class MainActivity : ComponentActivity() {
         val note = card()
         note.addView(text("LECTURAS REALES", 11, accent, true))
         note.addView(text(
-            "Los porcentajes se leen de los anuncios Bluetooth de los AirPods. La lectura puede venir en pasos de 10%. Al cerrar el estuche, su batería puede dejar de anunciarse y se conserva la última lectura recibida.",
+            "Los datos se leen de anuncios Bluetooth y pueden llegar en pasos de 10%. La posición individual izquierda/derecha queda sin confirmar cuando el anuncio no permite distinguir cada audífono. No se inventan estados.",
             13, secondary
         ))
         updated = text("Todavía no se ha recibido una lectura.", 12, secondary)
         note.addView(updated)
         content.addView(note)
+        content.addView(space(14))
+        val modes = card()
+        modes.addView(text("CONTROLES DE SONIDO", 11, accent, true))
+        modes.addView(text("Cancelación de ruido, Transparencia y Audio espacial", 16, Color.WHITE, true))
+        modes.addView(text("No disponibles en esta compilación. Requieren implementar el canal de control AACP de LibrePods. El escaneo BLE no puede cambiar estos modos.", 13, secondary))
+        content.addView(modes)
         content.addView(space(18))
-        content.addView(text("Versión 0.4.0", 11, secondary))
+        content.addView(text("Versión 0.5.0", 11, secondary))
         showBattery(null)
     }
 
@@ -170,6 +182,8 @@ class MainActivity : ComponentActivity() {
             rightStatus.text = "Sin lectura"
             setPosition(leftPosition, null)
             setPosition(rightPosition, null)
+            advertiserStatus.text = "Anuncio del AirPod: sin lectura"
+            lidStatus.text = "Tapa del estuche: sin datos"
             caseStatus.text = "Sin lectura"
             return
         }
@@ -180,6 +194,16 @@ class MainActivity : ComponentActivity() {
         rightStatus.text = chargeText(data.right)
         setPosition(leftPosition, data.leftInCase)
         setPosition(rightPosition, data.rightInCase)
+        advertiserStatus.text = when (data.advertiserInCase) {
+            true -> "Anuncio del AirPod: dentro del estuche"
+            false -> "Anuncio del AirPod: fuera del estuche"
+            null -> "Anuncio del AirPod: estado desconocido"
+        }
+        lidStatus.text = when (data.lidOpen) {
+            true -> "Tapa del estuche: abierta"
+            false -> "Tapa del estuche: cerrada"
+            null -> "Tapa del estuche: sin datos"
+        }
         caseStatus.text = chargeText(data.case)
         scanStatus.text = "AirPods Pro 3 detectados · señal Bluetooth " + data.rssi + " dBm"
         scanButton.text = "Buscando automáticamente"
