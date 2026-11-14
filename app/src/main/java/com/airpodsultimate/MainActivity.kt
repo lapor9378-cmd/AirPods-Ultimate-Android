@@ -189,15 +189,15 @@ class MainActivity : ComponentActivity() {
         val surround = Switch(this).apply {
             text = "Envolvente virtual"
             setTextColor(Color.WHITE)
-            isChecked = false
-            isEnabled = false
+            isChecked = audioPrefs.getBoolean("virtualizer", false)
+            isEnabled = master.isChecked
         }
         panel.addView(surround)
         val bass = Switch(this).apply {
             text = "Realce de graves"
             setTextColor(Color.WHITE)
-            isChecked = false
-            isEnabled = false
+            isChecked = audioPrefs.getBoolean("bass", false)
+            isEnabled = master.isChecked
         }
         panel.addView(bass)
         val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
@@ -235,7 +235,15 @@ class MainActivity : ComponentActivity() {
                 surround.isEnabled = ok && engine.hasVirtualizer
                 bass.isEnabled = ok && engine.hasBassBoost
                 bars.forEach { it.isEnabled = ok && engine.hasEqualizer }
-                if (!ok) master.isChecked = false
+                if (ok) {
+                    for (i in bars.indices) engine.setBand(i, audioPrefs.getInt("band_$i", 120) - 120)
+                    engine.setVirtualizer(surround.isChecked)
+                    engine.setBassBoost(bass.isChecked)
+                }
+                if (!ok) {
+                    master.isChecked = false
+                    audioPrefs.edit().putBoolean("master", false).apply()
+                }
             } else {
                 audioPrefs.edit().putBoolean("master", false).apply()
                 soundEngine?.disable()
