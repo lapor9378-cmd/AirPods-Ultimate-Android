@@ -1,81 +1,47 @@
 package com.airpodsultimate
 
-import android.Manifest
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothDevice
-import android.app.AlertDialog
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
-import android.content.pm.PackageManager
+import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
-import android.os.Build
+import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
+import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.SeekBar
-import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.PI
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val background = Color.rgb(10, 14, 24)
     private val surface = Color.rgb(24, 32, 48)
     private val accent = Color.rgb(133, 160, 255)
     private val secondary = Color.rgb(167, 179, 199)
-
-    private lateinit var scanStatus: TextView
-    private lateinit var leftValue: TextView
-    private lateinit var rightValue: TextView
-    private lateinit var caseValue: TextView
-    private lateinit var leftStatus: TextView
-    private lateinit var rightStatus: TextView
-    private lateinit var leftPosition: TextView
-    private lateinit var rightPosition: TextView
-    private lateinit var caseStatus: TextView
-    private lateinit var advertiserStatus: TextView
-    private lateinit var lidStatus: TextView
-    private lateinit var earStatus: TextView
-    private lateinit var linkStatus: TextView
-    private lateinit var updated: TextView
-    private lateinit var scanButton: Button
-
-    private var latest: AirPodsBattery? = null
-    private var scanning = false
+    private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private lateinit var routeStatus: TextView
+    private lateinit var volumeStatus: TextView
+    private lateinit var formatStatus: TextView
+    private lateinit var testStatus: TextView
+    private lateinit var testButton: Button
+    private val testRunning = AtomicBoolean(false)
+    private var testTrack: AudioTrack? = null
+    private var testThread: Thread? = null
     private val handler = Handler(Looper.getMainLooper())
-    private val refreshClock = object : Runnable {
+    private val refresh = object : Runnable {
         override fun run() {
-            updateFreshness()
-            if (scanning) handler.postDelayed(this, 1000)
-        }
-    }
-
-    private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val payload = result.scanRecord?.getManufacturerSpecificData(AirPodsBattery.APPLE_COMPANY_ID) ?: return
-            val reading = AirPodsBattery.decode(payload) ?: return
-            if (reading.modelId != AirPodsBattery.AIRPODS_PRO_3_MODEL) return
-            runOnUiThread {
-                latest = reading.copy(rssi = result.rssi, seenAt = System.currentTimeMillis())
-                showBattery(latest!!)
-            }
-        }
-
-        override fun onScanFailed(errorCode: Int) {
-            runOnUiThread {
-                scanning = false
-                scanStatus.text = "Android no pudo iniciar el escaneo Bluetooth (código " + errorCode + ")."
-                scanButton.text = "Volver a intentar"
-            }
+            refreshDiagnostics()
+            handler.postDelayed(this, 1500)
         }
     }
 
@@ -84,23 +50,18 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = background
         window.navigationBarColor = background
         render()
+        refreshDiagnostics()
     }
 
     override fun onResume() {
         super.onResume()
-        beginScanningIfAllowed()
-        if (audioPrefs.getBoolean("master", false)) {
-            val engine = soundEngine ?: SoundEffectsEngine().also { soundEngine = it }
-            if (engine.enable()) {
-                for (i in 0 until 5) engine.setBand(i, audioPrefs.getInt("band_$i", 120) - 120)
-                engine.setVirtualizer(audioPrefs.getBoolean("virtualizer", false))
-                engine.setBassBoost(audioPrefs.getBoolean("bass", false))
-            }
-        }
+        handler.removeCallbacks(refresh)
+        handler.post(refresh)
     }
 
     override fun onPause() {
-        stopScanning()
+        handler.removeCallbacks(refresh)
+        stopStereoTest()
         super.onPause()
     }
 
@@ -110,417 +71,177 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(28), dp(20), dp(30))
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(this@MainActivity.background)
+            setBackgroundColor(background)
             addView(content)
         }
         setContentView(scroll)
 
         content.addView(text("AIRPODS ULTIMATE", 12, accent, true))
-        content.addView(text("Batería", 32, Color.WHITE, true))
-        content.addView(text("Niveles de carga de tus AirPods Pro 3", 14, secondary))
-        content.addView(space(22))
-
-        val statusCard = card()
-        statusCard.addView(text("ESTADO DE CONEXIÓN", 11, accent, true))
-        scanStatus = text("Preparando Bluetooth…", 14, Color.WHITE)
-        statusCard.addView(scanStatus)
-        advertiserStatus = text("Anuncio del AirPod: esperando datos…", 13, secondary)
-        lidStatus = text("Tapa del estuche: sin datos", 13, secondary)
-        statusCard.addView(advertiserStatus)
-        statusCard.addView(lidStatus)
-        earStatus = text("Detección de oído: esperando datos…", 13, secondary)
-        linkStatus = text("Estado Bluetooth: esperando datos…", 13, secondary)
-        statusCard.addView(earStatus)
-        statusCard.addView(linkStatus)
-        scanButton = button("Buscar AirPods") { requestScanPermissions() }
-        statusCard.addView(scanButton)
-        content.addView(statusCard)
-
-        content.addView(space(14))
-        content.addView(batteryCard("AUDÍFONO IZQUIERDO", true, 0))
-        content.addView(space(10))
-        content.addView(batteryCard("AUDÍFONO DERECHO", true, 1))
-        content.addView(space(10))
-        content.addView(batteryCard("ESTUCHE DE CARGA", false, 2))
-
-        content.addView(space(14))
-        val note = card()
-        note.addView(text("LECTURAS REALES", 11, accent, true))
-        note.addView(text(
-            "Los datos se leen de anuncios BLE. La detección de oído y el estado de conexión se interpretan desde el protocolo de proximidad. El indicador dentro/fuera del estuche corresponde al audífono que emite el anuncio, no identifica por sí solo izquierda o derecha.",
-            13, secondary
-        ))
-        updated = text("Todavía no se ha recibido una lectura.", 12, secondary)
-        note.addView(updated)
-        content.addView(note)
-        content.addView(space(14))
-        content.addView(buildSoundCard())
-        val modes = card()
-        modes.addView(text("AIRPODS · MODOS DE ESCUCHA", 11, accent, true))
-        modes.addView(text("Cancelación de ruido, Transparencia y gestos", 16, Color.WHITE, true))
-        modes.addView(text("Los controles de gestos y seguimiento usan el canal AACP clásico. La compatibilidad depende del firmware de los AirPods y del Bluetooth del teléfono; si el canal no abre, la app lo indicará sin simular que funciona.", 13, secondary))
-        content.addView(modes)
-        content.addView(space(14))
-        content.addView(buildHeadControlsCard())
+        content.addView(text("Centro de audio", 30, Color.WHITE, true))
+        content.addView(text("Herramientas prácticas para tus AirPods en Android", 14, secondary))
         content.addView(space(18))
-        content.addView(text("Versión 0.8.0", 11, secondary))
-        showBattery(null)
-    }
 
-    private var soundEngine: SoundEffectsEngine? = null
-    private val audioPrefs by lazy { getSharedPreferences("audio_settings", MODE_PRIVATE) }
-    private var aapClient: AapControlClient? = null
-    private lateinit var aapStatus: TextView
-    private lateinit var headGesturesSwitch: Switch
-    private lateinit var headTrackingSwitch: Switch
+        val connection = card()
+        connection.addView(text("SALIDA DE AUDIO", 11, accent, true))
+        routeStatus = text("Detectando salida…", 16, Color.WHITE, true)
+        connection.addView(routeStatus)
+        connection.addView(text("La app identifica la salida que Android está usando. No intenta abrir canales privados ni modificar la conexión Bluetooth.", 13, secondary))
+        connection.addView(button("Abrir ajustes Bluetooth") { openSettings(Settings.ACTION_BLUETOOTH_SETTINGS) })
+        connection.addView(button("Abrir ajustes de sonido") { openSettings(Settings.ACTION_SOUND_SETTINGS) })
+        content.addView(connection)
 
-    private fun buildSoundCard(): LinearLayout {
-        val panel = card()
-        panel.addView(text("AUDIO · ECUALIZADOR", 11, accent, true))
-        panel.addView(text("Control de sonido", 20, Color.WHITE, true))
-        val state = text("Comprobando efectos del sistema…", 12, secondary)
-        panel.addView(state)
-        val master = Switch(this).apply {
-            text = "Procesamiento de sonido"
-            setTextColor(Color.WHITE)
-            isChecked = audioPrefs.getBoolean("master", false)
-        }
-        panel.addView(master)
-        val surround = Switch(this).apply {
-            text = "Envolvente virtual"
-            setTextColor(Color.WHITE)
-            isChecked = audioPrefs.getBoolean("virtualizer", false)
-            isEnabled = master.isChecked
-        }
-        panel.addView(surround)
-        val bass = Switch(this).apply {
-            text = "Realce de graves"
-            setTextColor(Color.WHITE)
-            isChecked = audioPrefs.getBoolean("bass", false)
-            isEnabled = master.isChecked
-        }
-        panel.addView(bass)
-        val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        listOf("Plano", "Rock", "Vocal", "Bass").forEach { name ->
-            val b = Button(this).apply {
-                text = name
-                isAllCaps = false
-                textSize = 11f
-                setOnClickListener { soundEngine?.applyPreset(name) }
-            }
-            presets.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f))
-        }
-        panel.addView(presets)
-        val frequencies = listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
-        val bars = ArrayList<SeekBar>()
-        frequencies.forEachIndexed { index, label ->
-            panel.addView(text(label, 12, secondary, true))
-            val seek = SeekBar(this).apply { max = 240; progress = audioPrefs.getInt("band_$index", 120).coerceIn(0, 240); isEnabled = master.isChecked }
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) { audioPrefs.edit().putInt("band_$index", progress).apply(); soundEngine?.setBand(index, progress - 120) }
-                }
-                override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) {}
-            })
-            bars.add(seek)
-            panel.addView(seek)
-        }
-        master.setOnCheckedChangeListener { _, checked ->
-            if (checked) {
-                audioPrefs.edit().putBoolean("master", true).apply()
-                val engine = soundEngine ?: SoundEffectsEngine().also { soundEngine = it }
-                val ok = engine.enable()
-                state.text = if (ok) "Ecualizador activo. Envolvente y graves permanecen apagados hasta que los actives." else "Este firmware no permite efectos globales. No se ha aplicado ningún cambio."
-                surround.isEnabled = ok && engine.hasVirtualizer
-                bass.isEnabled = ok && engine.hasBassBoost
-                bars.forEach { it.isEnabled = ok && engine.hasEqualizer }
-                if (ok) {
-                    for (i in bars.indices) engine.setBand(i, audioPrefs.getInt("band_$i", 120) - 120)
-                    engine.setVirtualizer(surround.isChecked)
-                    engine.setBassBoost(bass.isChecked)
-                }
-                if (!ok) {
-                    master.isChecked = false
-                    audioPrefs.edit().putBoolean("master", false).apply()
-                }
-            } else {
-                audioPrefs.edit().putBoolean("master", false).apply()
-                soundEngine?.disable()
-                state.text = "Procesamiento desactivado."
-                surround.isChecked = false
-                bass.isChecked = false
-                surround.isEnabled = false
-                bass.isEnabled = false
-                bars.forEach { it.isEnabled = false }
-            }
-        }
-        surround.setOnCheckedChangeListener { _, checked -> audioPrefs.edit().putBoolean("virtualizer", checked).apply(); soundEngine?.setVirtualizer(checked) }
-        bass.setOnCheckedChangeListener { _, checked -> audioPrefs.edit().putBoolean("bass", checked).apply(); soundEngine?.setBassBoost(checked) }
-        return panel
-    }
-
-
-    private fun buildHeadControlsCard(): LinearLayout {
-        val panel = card()
-        panel.addView(text("AIRPODS · GESTOS Y MOVIMIENTO", 11, accent, true))
-        panel.addView(text("Controles de cabeza", 20, Color.WHITE, true))
-        aapStatus = text("Conecta tus AirPods para abrir el canal de control AACP.", 13, secondary)
-        panel.addView(aapStatus)
-        panel.addView(button("Conectar canal AirPods") { chooseAapDevice() })
-        headGesturesSwitch = Switch(this).apply {
-            text = "Gestos de cabeza (asentir / negar)"
-            setTextColor(Color.WHITE)
-            isEnabled = false
-        }
-        panel.addView(headGesturesSwitch)
-        headTrackingSwitch = Switch(this).apply {
-            text = "Seguimiento de movimiento de cabeza"
-            setTextColor(Color.WHITE)
-            isEnabled = false
-        }
-        panel.addView(headTrackingSwitch)
-        headGesturesSwitch.setOnCheckedChangeListener { _, checked ->
-            if (aapClient?.setHeadGestures(checked) != true) {
-                headGesturesSwitch.isChecked = false
-                aapStatus.text = "No se pudo enviar la configuración de gestos."
-            } else getSharedPreferences("airpods_settings", MODE_PRIVATE).edit().putBoolean("head_gestures", checked).apply()
-        }
-        headTrackingSwitch.setOnCheckedChangeListener { _, checked ->
-            if (aapClient?.setHeadTracking(checked) != true) {
-                headTrackingSwitch.isChecked = false
-                aapStatus.text = "No se pudo iniciar el flujo de sensores."
-            } else getSharedPreferences("airpods_settings", MODE_PRIVATE).edit().putBoolean("head_tracking", checked).apply()
-        }
-        return panel
-    }
-
-    @Suppress("MissingPermission")
-    private fun chooseAapDevice() {
-        try {
-            val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-            val devices = manager.adapter?.bondedDevices?.toList().orEmpty()
-            if (devices.isEmpty()) {
-                aapStatus.text = "No hay dispositivos emparejados. Empareja tus AirPods primero."
-                return
-            }
-            val labels = devices.map { (it.name ?: "Dispositivo") + " · " + it.address.takeLast(5) }.toTypedArray()
-            AlertDialog.Builder(this).setTitle("Selecciona tus AirPods")
-                .setItems(labels) { _, which -> connectAap(devices[which]) }
-                .setNegativeButton("Cancelar", null).show()
-        } catch (_: SecurityException) {
-            aapStatus.text = "Falta el permiso Bluetooth de dispositivos cercanos."
-        }
-    }
-
-    private fun connectAap(device: BluetoothDevice) {
-        aapClient?.close()
-        aapStatus.text = "Conectando al canal AACP…"
-        headGesturesSwitch.isEnabled = false
-        headTrackingSwitch.isEnabled = false
-        val client = AapControlClient()
-        aapClient = client
-        client.connect(device, { message, connected ->
-            runOnUiThread {
-                aapStatus.text = message
-                headGesturesSwitch.isEnabled = connected
-                headTrackingSwitch.isEnabled = connected
-                if (connected) {
-                    val prefs = getSharedPreferences("airpods_settings", MODE_PRIVATE)
-                    headGesturesSwitch.isChecked = prefs.getBoolean("head_gestures", false)
-                    headTrackingSwitch.isChecked = prefs.getBoolean("head_tracking", false)
-                }
-            }
-        }, { pitch, yaw, roll ->
-            runOnUiThread {
-                aapStatus.text = "Movimiento · Inclinación %.1f° · Giro %.1f° · Rotación %.1f°".format(pitch, yaw, roll)
-            }
+        content.addView(space(12))
+        val diagnostics = card()
+        diagnostics.addView(text("DIAGNÓSTICO", 11, accent, true))
+        volumeStatus = text("Volumen multimedia: --", 16, Color.WHITE, true)
+        formatStatus = text("Formato de audio: --", 13, secondary)
+        diagnostics.addView(volumeStatus)
+        diagnostics.addView(formatStatus)
+        diagnostics.addView(text("Solo lectura: esta app no sube, baja ni limita el volumen del teléfono.", 13, secondary))
+        diagnostics.addView(button("Abrir opciones de desarrollador") {
+            openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
         })
+        content.addView(diagnostics)
+
+        content.addView(space(12))
+        val stereo = card()
+        stereo.addView(text("PRUEBA ESTÉREO", 11, accent, true))
+        stereo.addView(text("Canal izquierdo y derecho", 19, Color.WHITE, true))
+        stereo.addView(text("Reproduce un tono breve y suave primero por el lado izquierdo y después por el derecho. Mantén el volumen a un nivel cómodo.", 13, secondary))
+        testStatus = text("Listo para probar.", 13, secondary)
+        stereo.addView(testStatus)
+        testButton = button("Iniciar prueba estéreo") { startStereoTest() }
+        stereo.addView(testButton)
+        stereo.addView(button("Detener prueba") { stopStereoTest() })
+        content.addView(stereo)
+
+        content.addView(space(12))
+        val help = card()
+        help.addView(text("VOLUMEN QUE BAJA SOLO", 11, accent, true))
+        help.addView(text("Revisa «Desactivar volumen absoluto»", 17, Color.WHITE, true))
+        help.addView(text("En algunos Android, el volumen Bluetooth del teléfono y el de los audífonos quedan sincronizados. En Opciones de desarrollador puedes probar «Desactivar volumen absoluto» y después desconectar y volver a conectar los AirPods. El nombre puede variar según HiOS.", 13, secondary))
+        help.addView(text("Esta app no puede cambiar esa opción protegida por Android. Tampoco fuerza el volumen para evitar conflictos con el sistema.", 13, secondary))
+        content.addView(help)
+
+        content.addView(space(18))
+        content.addView(text("Versión 0.9.0 · Sin efectos de audio en segundo plano", 11, secondary))
     }
 
-    private fun batteryCard(title: String, earbud: Boolean, index: Int): LinearLayout {
-        val panel = card()
-        panel.addView(text(title, 11, accent, true))
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val value = text("--%", 34, Color.WHITE, true)
-        row.addView(value, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(text(if (earbud) "◉" else "▣", 25, secondary, true))
-        panel.addView(row)
-        val state = text("Esperando señal…", 12, secondary)
-        panel.addView(state)
-        if (earbud) {
-            val position = text("● Estado no detectado", 13, secondary, true)
-            panel.addView(position)
-            if (index == 0) leftPosition = position else rightPosition = position
-        }
-        when (index) {
-            0 -> { leftValue = value; leftStatus = state }
-            1 -> { rightValue = value; rightStatus = state }
-            else -> { caseValue = value; caseStatus = state }
-        }
-        return panel
-    }
-
-    private fun showBattery(data: AirPodsBattery?) {
-        if (!::leftValue.isInitialized) return
-        if (data == null) {
-            leftValue.text = "--%"
-            rightValue.text = "--%"
-            caseValue.text = "--%"
-            leftStatus.text = "Sin lectura"
-            rightStatus.text = "Sin lectura"
-            setPosition(leftPosition, null)
-            setPosition(rightPosition, null)
-            advertiserStatus.text = "Anuncio del AirPod: sin lectura"
-            lidStatus.text = "Tapa del estuche: sin datos"
-            earStatus.text = "Detección de oído: sin datos"
-            linkStatus.text = "Estado Bluetooth: sin datos"
-            caseStatus.text = "Sin lectura"
-            return
-        }
-        leftValue.text = data.left.percent?.let { it.toString() + "%" } ?: "--%"
-        rightValue.text = data.right.percent?.let { it.toString() + "%" } ?: "--%"
-        caseValue.text = data.case.percent?.let { it.toString() + "%" } ?: "--%"
-        leftStatus.text = chargeText(data.left)
-        rightStatus.text = chargeText(data.right)
-        setPosition(leftPosition, data.leftInCase)
-        setPosition(rightPosition, data.rightInCase)
-        advertiserStatus.text = when (data.advertiserInCase) {
-            true -> "Anuncio del AirPod: dentro del estuche"
-            false -> "Anuncio del AirPod: fuera del estuche"
-            null -> "Anuncio del AirPod: estado desconocido"
-        }
-        lidStatus.text = when (data.lidOpen) {
-            true -> "Tapa del estuche: abierta"
-            false -> "Tapa del estuche: cerrada"
-            null -> "Tapa del estuche: sin datos"
-        }
-        earStatus.text = "Detección de oído · Izq: " + (if (data.leftInEar) "puesto" else "fuera") + " · Der: " + (if (data.rightInEar) "puesto" else "fuera")
-        linkStatus.text = "Estado Bluetooth: " + data.connectionState + if (data.paired) " · emparejado" else " · no emparejado"
-        caseStatus.text = chargeText(data.case)
-        scanStatus.text = "Anuncio AirPods Pro 3 detectado · " + data.connectionState + " · señal " + data.rssi + " dBm"
-        scanButton.text = "Buscando automáticamente"
-        updated.text = "Última lectura: ahora. Los valores se actualizan al recibir otra señal."
-    }
-
-    private fun setPosition(view: TextView, inCase: Boolean?) {
-        when (inCase) {
-            true -> { view.text = "● En caja"; view.setTextColor(Color.rgb(255, 183, 77)) }
-            false -> { view.text = "● Fuera del estuche"; view.setTextColor(Color.rgb(76, 220, 140)) }
-            null -> { view.text = "● Estado no detectado"; view.setTextColor(secondary) }
-        }
-    }
-
-    private fun chargeText(part: BatteryPart): String = when {
-        part.percent == null -> "Nivel no anunciado"
-        part.charging -> "Cargando"
-        else -> "No está cargando"
-    }
-
-    private fun updateFreshness() {
-        val data = latest ?: return
-        val seconds = ((System.currentTimeMillis() - data.seenAt) / 1000).coerceAtLeast(0)
-        updated.text = if (seconds < 3) {
-            "Última lectura: ahora."
-        } else {
-            "Última lectura hace " + seconds + " s. El estuche puede dejar de emitir al cerrar la tapa."
-        }
-    }
-
-    private fun requestScanPermissions() {
-        val needed = if (Build.VERSION.SDK_INT >= 31) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        val missing = needed.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 42)
-        } else {
-            startScanning()
-        }
-    }
-
-    private fun beginScanningIfAllowed() {
-        if (!::scanStatus.isInitialized) return
-        val needed = if (Build.VERSION.SDK_INT >= 31) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        if (needed.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
-            startScanning()
-        } else {
-            scanStatus.text = "Concede el permiso Bluetooth para leer la batería de los AirPods."
-            scanButton.text = "Conceder permiso Bluetooth"
-        }
-    }
-
-    @Suppress("MissingPermission")
-    private fun startScanning() {
-        try {
-            val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-            val adapter = manager.adapter
-            if (adapter == null || !adapter.isEnabled) {
-                scanStatus.text = "Activa Bluetooth para buscar tus AirPods."
-                scanButton.text = "Revisar Bluetooth"
-                return
-            }
-            val scanner = adapter.bluetoothLeScanner
-            if (scanner == null) {
-                scanStatus.text = "Este teléfono no ofrece escaneo Bluetooth LE."
-                return
-            }
-            if (scanning) return
-            val filter = ScanFilter.Builder()
-                .setManufacturerData(
-                    AirPodsBattery.APPLE_COMPANY_ID,
-                    byteArrayOf(AirPodsBattery.PROXIMITY_TYPE.toByte()),
-                    byteArrayOf(0xFF.toByte())
-                )
-                .build()
-            val settings = ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                .build()
-            scanner.startScan(listOf(filter), settings, scanCallback)
-            scanning = true
-            scanStatus.text = "Buscando tus AirPods Pro 3… Abre la tapa del estuche para actualizar sus niveles."
-            scanButton.text = "Escaneo activo"
-            handler.removeCallbacks(refreshClock)
-            handler.post(refreshClock)
-        } catch (_: SecurityException) {
-            scanStatus.text = "Android bloqueó el escaneo. Revisa los permisos Bluetooth."
-            scanButton.text = "Conceder permiso Bluetooth"
-        } catch (e: Exception) {
-            scanStatus.text = "No se pudo iniciar el escaneo: " + (e.localizedMessage ?: "error")
-        }
-    }
-
-    @Suppress("MissingPermission")
-    private fun stopScanning() {
-        if (!scanning) return
-        try {
-            val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-            manager.adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+    private fun refreshDiagnostics() {
+        val outputs = try {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
         } catch (_: Exception) {
+            emptyList()
         }
-        scanning = false
-        handler.removeCallbacks(refreshClock)
+        val bluetooth = outputs.filter {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                (BuildCompat.isBluetoothType(it.type))
+        }
+        val route = when {
+            bluetooth.isNotEmpty() -> bluetooth.joinToString(" · ") { it.productName.toString() }
+            outputs.any { it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET } -> "Audífonos con cable"
+            outputs.any { it.type == AudioDeviceInfo.TYPE_USB_HEADSET } -> "Audífonos USB"
+            outputs.any { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER } -> "Altavoz del teléfono"
+            else -> outputs.firstOrNull()?.productName?.toString() ?: "Salida no identificada"
+        }
+        routeStatus.text = route
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        volumeStatus.text = "Volumen multimedia: $current / $maximum"
+        val rate = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE) ?: "No disponible"
+        val frames = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER) ?: "No disponible"
+        formatStatus.text = "Frecuencia del sistema: $rate Hz · Búfer: $frames frames"
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 42) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                startScanning()
-            } else {
-                scanStatus.text = "Permiso denegado. Sin él Android no permite leer los anuncios Bluetooth."
+    private fun startStereoTest() {
+        if (!testRunning.compareAndSet(false, true)) return
+        testStatus.text = "Reproduciendo izquierda y derecha…"
+        testButton.isEnabled = false
+        testThread = Thread {
+            var track: AudioTrack? = null
+            try {
+                val sampleRate = 44100
+                val minBuffer = AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_OUT_STEREO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+                if (minBuffer <= 0) throw IllegalStateException("El sistema no admite la prueba de audio.")
+                val bufferSize = maxOf(minBuffer, 8192)
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(sampleRate)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+                testTrack = track
+                track.setVolume(0.12f)
+                track.play()
+                playChannel(track, sampleRate, true)
+                if (testRunning.get()) Thread.sleep(250)
+                if (testRunning.get()) playChannel(track, sampleRate, false)
+                runOnUiThread { testStatus.text = "Prueba terminada. ¿Se escucharon ambos lados?" }
+            } catch (e: Exception) {
+                runOnUiThread { testStatus.text = "No se pudo completar la prueba: ${e.message ?: "error"}" }
+            } finally {
+                try { track?.pause() } catch (_: Exception) {}
+                try { track?.flush() } catch (_: Exception) {}
+                try { track?.release() } catch (_: Exception) {}
+                testTrack = null
+                testRunning.set(false)
+                runOnUiThread { testButton.isEnabled = true }
             }
+        }.apply { name = "AirPodsStereoTest"; start() }
+    }
+
+    private fun playChannel(track: AudioTrack, sampleRate: Int, left: Boolean) {
+        val chunkFrames = 1024
+        val totalFrames = sampleRate
+        val samples = ShortArray(chunkFrames * 2)
+        var writtenFrames = 0
+        while (writtenFrames < totalFrames && testRunning.get()) {
+            val frames = minOf(chunkFrames, totalFrames - writtenFrames)
+            for (i in 0 until frames) {
+                val t = (writtenFrames + i).toDouble() / sampleRate
+                val sample = (sin(2.0 * PI * 440.0 * t) * 1800.0).toInt().toShort()
+                samples[i * 2] = if (left) sample else 0
+                samples[i * 2 + 1] = if (left) 0 else sample
+            }
+            val result = track.write(samples, 0, frames * 2, AudioTrack.WRITE_BLOCKING)
+            if (result < 0) throw IllegalStateException("Error de salida de audio ($result).")
+            writtenFrames += frames
+        }
+    }
+
+    private fun stopStereoTest() {
+        testRunning.set(false)
+        try { testTrack?.pause() } catch (_: Exception) {}
+        try { testTrack?.flush() } catch (_: Exception) {}
+        testStatusSafe("Prueba detenida.")
+    }
+
+    private fun testStatusSafe(value: String) {
+        if (::testStatus.isInitialized) runOnUiThread { testStatus.text = value }
+        if (::testButton.isInitialized) runOnUiThread { testButton.isEnabled = true }
+    }
+
+    private fun openSettings(action: String) {
+        try {
+            startActivity(Intent(action))
+        } catch (_: Exception) {
+            try { startActivity(Intent(Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
         }
     }
 
@@ -551,4 +272,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}
+
+private object BuildCompat {
+    fun isBluetoothType(type: Int): Boolean =
+        type == 26 || type == 27
 }
