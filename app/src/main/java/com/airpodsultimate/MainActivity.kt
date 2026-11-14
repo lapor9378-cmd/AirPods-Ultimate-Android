@@ -149,10 +149,10 @@ class MainActivity : ComponentActivity() {
         val modes = card()
         modes.addView(text("AIRPODS · MODOS DE ESCUCHA", 11, accent, true))
         modes.addView(text("Cancelación de ruido, Transparencia y gestos", 16, Color.WHITE, true))
-        modes.addView(text("Pendientes de conexión AACP. Shizuku no sustituye el acceso al canal Bluetooth del sistema; no se mostrarán como activos hasta comprobar una conexión real.", 13, secondary))
+        modes.addView(text("Gestos de cabeza (asentir/negar), seguimiento de cabeza y modos ANC requieren una conexión Bluetooth AACP real. Esta versión todavía no puede enviar esos comandos; no mostraremos interruptores falsos. En Android 12 del TECNO, la ruta rootless de LibrePods no está soportada.", 13, secondary))
         content.addView(modes)
         content.addView(space(18))
-        content.addView(text("Versión 0.7.0", 11, secondary))
+        content.addView(text("Versión 0.7.1", 11, secondary))
         showBattery(null)
     }
 
@@ -214,7 +214,7 @@ class MainActivity : ComponentActivity() {
             if (checked) {
                 val engine = soundEngine ?: SoundEffectsEngine().also { soundEngine = it }
                 val ok = engine.enable()
-                state.text = if (ok) "Efectos activos en la salida global (si el firmware lo permite)." else "Este firmware no permite efectos globales. No se ha aplicado ningún cambio."
+                state.text = if (ok) "Ecualizador activo. Envolvente y graves permanecen apagados hasta que los actives." else "Este firmware no permite efectos globales. No se ha aplicado ningún cambio."
                 surround.isEnabled = ok && engine.hasVirtualizer
                 bass.isEnabled = ok && engine.hasBassBoost
                 bars.forEach { it.isEnabled = ok && engine.hasEqualizer }
