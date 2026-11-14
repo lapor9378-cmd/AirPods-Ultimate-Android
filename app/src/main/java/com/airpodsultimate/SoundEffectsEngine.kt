@@ -20,8 +20,8 @@ class SoundEffectsEngine {
                 try { virtualizer = Virtualizer(0, 0) } catch (_: Exception) {}
             }
             equalizer?.enabled = true
-            bass?.enabled = true
-            virtualizer?.enabled = true
+            bass?.enabled = false
+            virtualizer?.enabled = false
             hasEqualizer || hasBassBoost || hasVirtualizer
         } catch (_: Exception) {
             false
@@ -48,7 +48,7 @@ class SoundEffectsEngine {
     fun setBassBoost(enabled: Boolean) {
         try {
             val effect = bass ?: return
-            effect.setStrength(if (enabled) 650.toShort() else 0.toShort())
+            effect.setStrength(if (enabled) 350.toShort() else 0.toShort())
             effect.enabled = enabled
         } catch (_: Exception) {}
     }
@@ -56,16 +56,16 @@ class SoundEffectsEngine {
     fun setVirtualizer(enabled: Boolean) {
         try {
             val effect = virtualizer ?: return
-            effect.setStrength(if (enabled) 550.toShort() else 0.toShort())
+            effect.setStrength(if (enabled) 250.toShort() else 0.toShort())
             effect.enabled = enabled
         } catch (_: Exception) {}
     }
 
     fun applyPreset(name: String) {
         val values = when (name) {
-            "Rock" -> listOf(65, 35, -10, 35, 65)
-            "Vocal" -> listOf(-25, 5, 55, 45, 10)
-            "Bass" -> listOf(90, 65, 5, -20, -15)
+            "Rock" -> listOf(35, 20, -5, 20, 35)
+            "Vocal" -> listOf(-15, 0, 35, 30, 5)
+            "Bass" -> listOf(45, 30, 0, -10, -10)
             else -> listOf(0, 0, 0, 0, 0)
         }
         values.forEachIndexed { index, value -> setBand(index, value) }
