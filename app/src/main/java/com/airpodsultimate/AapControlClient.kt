@@ -78,14 +78,16 @@ class AapControlClient {
         )
     }
 
-    private fun send(packet: ByteArray): Boolean = try {
-        val active = socket ?: return false
-        synchronized(active) {
-            active.outputStream.write(packet)
-            active.outputStream.flush()
-        }
-        true
-    } catch (_: Exception) { false }
+    private fun send(packet: ByteArray): Boolean {
+        return try {
+            val active = socket ?: return false
+            synchronized(active) {
+                active.outputStream.write(packet)
+                active.outputStream.flush()
+            }
+            true
+        } catch (_: Exception) { false }
+    }
 
     private fun readShort(bytes: ByteArray, offset: Int): Float {
         val raw = (bytes[offset].toInt() and 0xFF) or ((bytes[offset + 1].toInt() and 0xFF) shl 8)
