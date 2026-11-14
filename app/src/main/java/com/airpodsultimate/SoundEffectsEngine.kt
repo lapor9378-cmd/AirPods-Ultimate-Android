@@ -13,19 +13,15 @@ class SoundEffectsEngine {
     val hasVirtualizer: Boolean get() = virtualizer != null
 
     fun enable(): Boolean {
-        return try {
-            if (equalizer == null && bass == null && virtualizer == null) {
-                try { equalizer = Equalizer(0, 0) } catch (_: Exception) {}
-                try { bass = BassBoost(0, 0) } catch (_: Exception) {}
-                try { virtualizer = Virtualizer(0, 0) } catch (_: Exception) {}
-            }
-            equalizer?.enabled = true
-            bass?.enabled = false
-            virtualizer?.enabled = false
-            hasEqualizer || hasBassBoost || hasVirtualizer
-        } catch (_: Exception) {
-            false
+        if (equalizer == null && bass == null && virtualizer == null) {
+            try { equalizer = Equalizer(0, 0) } catch (_: Exception) {}
+            try { bass = BassBoost(0, 0) } catch (_: Exception) {}
+            try { virtualizer = Virtualizer(0, 0) } catch (_: Exception) {}
         }
+        val eqReady = try { equalizer?.enabled = true; equalizer != null } catch (_: Exception) { false }
+        try { bass?.enabled = false } catch (_: Exception) {}
+        try { virtualizer?.enabled = false } catch (_: Exception) {}
+        return eqReady || hasBassBoost || hasVirtualizer
     }
 
     fun disable() {
@@ -37,10 +33,9 @@ class SoundEffectsEngine {
     fun setBand(index: Int, value: Int) {
         try {
             val eq = equalizer ?: return
-            if (index >= eq.numberOfBands) return
+            if (index !in 0 until eq.numberOfBands.toInt()) return
             val range = eq.bandLevelRange
-            val level = (range[0].toInt() + (value / 120f * (range[1] - range[0])).toInt())
-                .coerceIn(range[0].toInt(), range[1].toInt())
+            val level = (value * 100).coerceIn(range[0].toInt(), range[1].toInt())
             eq.setBandLevel(index.toShort(), level.toShort())
         } catch (_: Exception) {}
     }
@@ -48,7 +43,7 @@ class SoundEffectsEngine {
     fun setBassBoost(enabled: Boolean) {
         try {
             val effect = bass ?: return
-            effect.setStrength(if (enabled) 350.toShort() else 0.toShort())
+            effect.setStrength(if (enabled) 150.toShort() else 0.toShort())
             effect.enabled = enabled
         } catch (_: Exception) {}
     }
@@ -56,7 +51,7 @@ class SoundEffectsEngine {
     fun setVirtualizer(enabled: Boolean) {
         try {
             val effect = virtualizer ?: return
-            effect.setStrength(if (enabled) 250.toShort() else 0.toShort())
+            effect.setStrength(if (enabled) 100.toShort() else 0.toShort())
             effect.enabled = enabled
         } catch (_: Exception) {}
     }
