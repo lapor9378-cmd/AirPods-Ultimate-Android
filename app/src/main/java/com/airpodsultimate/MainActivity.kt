@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(28), dp(20), dp(30))
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(background)
+            setBackgroundColor(this@MainActivity.background)
             addView(content)
         }
         setContentView(scroll)
