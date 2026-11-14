@@ -9,8 +9,8 @@ android {
         applicationId = "com.airpodsultimate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
     }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions {
@@ -22,4 +22,5 @@ android {
 dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
 }
