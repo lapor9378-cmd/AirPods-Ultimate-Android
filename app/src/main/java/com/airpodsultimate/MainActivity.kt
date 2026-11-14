@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
         modes.addView(text("Pendientes de conexión AACP. Shizuku no sustituye el acceso al canal Bluetooth del sistema; no se mostrarán como activos hasta comprobar una conexión real.", 13, secondary))
         content.addView(modes)
         content.addView(space(18))
-        content.addView(text("Versión 0.6.0", 11, secondary))
+        content.addView(text("Versión 0.7.0", 11, secondary))
         showBattery(null)
     }
 
