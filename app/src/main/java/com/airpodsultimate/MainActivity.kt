@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(30), dp(20), dp(32))
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(background)
+            setBackgroundColor(this@MainActivity.background)
             addView(content)
         }
         setContentView(scroll)
@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 41) refreshBluetooth()
     }
