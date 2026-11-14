@@ -87,11 +87,18 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         beginScanningIfAllowed()
+        if (audioPrefs.getBoolean("master", false)) {
+            val engine = soundEngine ?: SoundEffectsEngine().also { soundEngine = it }
+            if (engine.enable()) {
+                for (i in 0 until 5) engine.setBand(i, audioPrefs.getInt("band_$i", 120) - 120)
+                engine.setVirtualizer(audioPrefs.getBoolean("virtualizer", false))
+                engine.setBassBoost(audioPrefs.getBoolean("bass", false))
+            }
+        }
     }
 
     override fun onPause() {
         stopScanning()
-        soundEngine?.disable()
         super.onPause()
     }
 
@@ -157,6 +164,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var soundEngine: SoundEffectsEngine? = null
+    private val audioPrefs by lazy { getSharedPreferences("audio_settings", MODE_PRIVATE) }
 
     private fun buildSoundCard(): LinearLayout {
         val panel = card()
@@ -167,7 +175,7 @@ class MainActivity : ComponentActivity() {
         val master = Switch(this).apply {
             text = "Procesamiento de sonido"
             setTextColor(Color.WHITE)
-            isChecked = false
+            isChecked = audioPrefs.getBoolean("master", false)
         }
         panel.addView(master)
         val surround = Switch(this).apply {
@@ -199,10 +207,10 @@ class MainActivity : ComponentActivity() {
         val bars = ArrayList<SeekBar>()
         frequencies.forEachIndexed { index, label ->
             panel.addView(text(label, 12, secondary, true))
-            val seek = SeekBar(this).apply { max = 240; progress = 120; isEnabled = false }
+            val seek = SeekBar(this).apply { max = 240; progress = audioPrefs.getInt("band_$index", 120).coerceIn(0, 240); isEnabled = master.isChecked }
             seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) soundEngine?.setBand(index, progress - 120)
+                    if (fromUser) { audioPrefs.edit().putInt("band_$index", progress).apply(); soundEngine?.setBand(index, progress - 120) }
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
                 override fun onStopTrackingTouch(s: SeekBar?) {}
@@ -212,6 +220,7 @@ class MainActivity : ComponentActivity() {
         }
         master.setOnCheckedChangeListener { _, checked ->
             if (checked) {
+                audioPrefs.edit().putBoolean("master", true).apply()
                 val engine = soundEngine ?: SoundEffectsEngine().also { soundEngine = it }
                 val ok = engine.enable()
                 state.text = if (ok) "Ecualizador activo. Envolvente y graves permanecen apagados hasta que los actives." else "Este firmware no permite efectos globales. No se ha aplicado ningún cambio."
@@ -220,6 +229,7 @@ class MainActivity : ComponentActivity() {
                 bars.forEach { it.isEnabled = ok && engine.hasEqualizer }
                 if (!ok) master.isChecked = false
             } else {
+                audioPrefs.edit().putBoolean("master", false).apply()
                 soundEngine?.disable()
                 state.text = "Procesamiento desactivado."
                 surround.isChecked = false
@@ -229,8 +239,8 @@ class MainActivity : ComponentActivity() {
                 bars.forEach { it.isEnabled = false }
             }
         }
-        surround.setOnCheckedChangeListener { _, checked -> soundEngine?.setVirtualizer(checked) }
-        bass.setOnCheckedChangeListener { _, checked -> soundEngine?.setBassBoost(checked) }
+        surround.setOnCheckedChangeListener { _, checked -> audioPrefs.edit().putBoolean("virtualizer", checked).apply(); soundEngine?.setVirtualizer(checked) }
+        bass.setOnCheckedChangeListener { _, checked -> audioPrefs.edit().putBoolean("bass", checked).apply(); soundEngine?.setBassBoost(checked) }
         return panel
     }
 
