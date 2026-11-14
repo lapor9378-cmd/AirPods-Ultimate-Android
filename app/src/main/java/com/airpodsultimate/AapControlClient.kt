@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// AAP/L2CAP protocol approach adapted from Androidpods (GPL-3.0-or-later): https://github.com/TimStebner/Androidpods
 package com.airpodsultimate
 
 import android.bluetooth.BluetoothDevice
