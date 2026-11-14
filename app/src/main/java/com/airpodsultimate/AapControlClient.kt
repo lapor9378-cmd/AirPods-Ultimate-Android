@@ -55,7 +55,7 @@ class AapControlClient {
 
     fun setHeadGestures(enabled: Boolean): Boolean = send(byteArrayOf(
         0x04,0x00,0x04,0x00,0x09,0x00,0x3E,
-        if (enabled) 0x02 else 0x00,0x00,0x00,0x00
+        (if (enabled) 0x02 else 0x00).toByte(),0x00,0x00,0x00
     ))
 
     fun setHeadTracking(enabled: Boolean): Boolean {
@@ -66,8 +66,8 @@ class AapControlClient {
     }
 
     private fun motionPacket(service: Int, enabled: Boolean): ByteArray {
-        val rate1 = if (enabled) 0x40.toByte() else 0
-        val rate2 = if (enabled) 0x9C.toByte() else 0
+        val rate1 = if (enabled) 0x40.toByte() else 0.toByte()
+        val rate2 = if (enabled) 0x9C.toByte() else 0.toByte()
         return byteArrayOf(
             0x04,0x00,0x04,0x00,0x17,0x00,0x00,0x00,
             0x10,0x00,0x10,0x00,0x08,0xA1.toByte(),0x02,0x42,
