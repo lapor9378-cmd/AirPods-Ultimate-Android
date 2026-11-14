@@ -35,7 +35,8 @@ class SoundEffectsEngine {
             val eq = equalizer ?: return
             if (index !in 0 until eq.numberOfBands.toInt()) return
             val range = eq.bandLevelRange
-            val level = (value * 100).coerceIn(range[0].toInt(), range[1].toInt())
+            val normalized = ((value + 120).coerceIn(0, 240)) / 240f
+            val level = (range[0] + normalized * (range[1] - range[0])).toInt().coerceIn(range[0].toInt(), range[1].toInt())
             eq.setBandLevel(index.toShort(), level.toShort())
         } catch (_: Exception) {}
     }
