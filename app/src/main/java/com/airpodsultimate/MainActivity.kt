@@ -2,27 +2,30 @@ package com.airpodsultimate
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
-import android.media.audiofx.Equalizer
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 
 class MainActivity : ComponentActivity() {
     private val background = Color.rgb(10, 14, 24)
@@ -31,24 +34,43 @@ class MainActivity : ComponentActivity() {
     private val secondary = Color.rgb(167, 179, 199)
     private lateinit var status: TextView
     private lateinit var devices: TextView
-    private lateinit var eqInfo: TextView
-    private lateinit var trackInfo: TextView
-    private lateinit var playButton: Button
-    private lateinit var openAudio: ActivityResultLauncher<Array<String>>
-    private var player: ExoPlayer? = null
-    private var equalizer: Equalizer? = null
-    private var selectedPreset = "Plano"
+    private lateinit var musicInfo: TextView
+    private lateinit var accessButton: Button
+    private var sessionManager: MediaSessionManager? = null
+    private var activeControllers: List<MediaController> = emptyList()
+    private val controllerCallback = object : MediaController.Callback() {
+        override fun onMetadataChanged(metadata: MediaMetadata?) = showCurrentTrack()
+        override fun onPlaybackStateChanged(state: PlaybackState?) = showCurrentTrack()
+        override fun onSessionDestroyed() = refreshMediaSessions()
+    }
+    private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+        attachControllers(controllers.orEmpty())
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = background
         window.navigationBarColor = background
-        openAudio = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) openTrack(uri)
-        }
         render()
         refreshBluetooth()
         requestBluetoothPermission()
+        sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+    }
+
+    override fun onStart() {
+        super.onStart()
+        refreshMediaSessions()
+    }
+
+    override fun onStop() {
+        unregisterMediaSessions()
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::accessButton.isInitialized) updateAccessButton()
+        if (::musicInfo.isInitialized) refreshMediaSessions()
     }
 
     private fun render() {
@@ -57,7 +79,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(30), dp(20), dp(32))
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(this@MainActivity.background)
+            setBackgroundColor(background)
             addView(content)
         }
         setContentView(scroll)
@@ -82,151 +104,122 @@ class MainActivity : ComponentActivity() {
         content.addView(deviceCard)
 
         content.addView(space(14))
-        val playerCard = card()
-        playerCard.addView(text("REPRODUCTOR DE MÚSICA", 11, accent, true))
-        trackInfo = text("Selecciona una canción del teléfono para comenzar.", 14, Color.WHITE)
-        playerCard.addView(trackInfo)
-        playerCard.addView(button("Elegir archivo de música") { openAudio.launch(arrayOf("audio/*")) })
-        playButton = button("Reproducir") { togglePlayback() }
-        playButton.isEnabled = false
-        playerCard.addView(playButton)
-        playerCard.addView(button("Detener reproducción") { stopPlayback() })
-        content.addView(playerCard)
+        val musicCard = card()
+        musicCard.addView(text("REPRODUCCIÓN ACTUAL", 11, accent, true))
+        musicInfo = text("Buscando música que se esté reproduciendo en el teléfono…", 15, Color.WHITE)
+        musicCard.addView(musicInfo)
+        accessButton = button("Activar detección de música") { openNotificationAccess() }
+        musicCard.addView(accessButton)
+        musicCard.addView(button("Actualizar música") { refreshMediaSessions() })
+        musicCard.addView(text(
+            "Detecta sesiones multimedia de aplicaciones de streaming y reproductores compatibles. No necesitas elegir ni descargar canciones.",
+            12, secondary
+        ))
+        content.addView(musicCard)
 
         content.addView(space(14))
         val audioCard = card()
         audioCard.addView(text("ECUALIZADOR", 11, accent, true))
-        eqInfo = text("Abre una canción. El ecualizador se conectará a su sesión de audio.", 13, secondary)
-        audioCard.addView(eqInfo)
-        listOf("Plano", "Bajos", "Voces", "Brillante").forEach { preset ->
-            audioCard.addView(button(preset) { applyPreset(preset) })
-        }
+        audioCard.addView(text(
+            "La detección de Spotify, Deezer y otros servicios funciona por las sesiones multimedia de Android. Aplicar efectos directamente al audio de otra aplicación depende del sistema y no está permitido por todos los teléfonos. Esta versión no fingirá que un perfil se aplicó si Android no lo permite.",
+            13, secondary
+        ))
         content.addView(audioCard)
 
         content.addView(space(14))
         val limits = card()
         limits.addView(text("COMPATIBILIDAD", 11, accent, true))
         limits.addView(text(
-            "El ecualizador actúa sobre la música reproducida aquí. Android no garantiza que una app pueda modificar el sonido de Spotify, YouTube u otros reproductores externos. ANC, transparencia, audio espacial y sensores propietarios de Apple no están garantizados.",
+            "La información disponible depende de cada reproductor: título, artista, carátula y estado pueden variar. La app no graba ni escucha el audio.",
             13, secondary
         ))
         content.addView(limits)
         content.addView(space(18))
-        content.addView(text("Versión 0.2.0", 11, secondary))
+        content.addView(text("Versión 0.3.0", 11, secondary))
+        updateAccessButton()
     }
 
-    private fun openTrack(uri: Uri) {
+    private fun hasNotificationAccess(): Boolean {
+        val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false
+        return enabled.split(":").any { ComponentName.unflattenFromString(it)?.packageName == packageName }
+    }
+
+    private fun openNotificationAccess() {
         try {
-            try {
-                contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: Exception) {
-                // Algunos proveedores no ofrecen permisos persistentes.
-            }
-            releaseEqualizer()
-            val audioPlayer = player ?: ExoPlayer.Builder(this).build().also { created ->
-                created.addListener(object : Player.Listener {
-                    override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                        connectEqualizer(audioSessionId)
-                    }
-
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (playbackState == Player.STATE_READY) {
-                            connectEqualizer(created.audioSessionId)
-                        }
-                        updatePlaybackButton()
-                    }
-
-                    override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        updatePlaybackButton()
-                    }
-
-                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        trackInfo.text = "No se pudo reproducir este archivo: ${error.localizedMessage ?: "formato no compatible"}"
-                    }
-                })
-                player = created
-            }
-            audioPlayer.setMediaItem(MediaItem.fromUri(uri))
-            audioPlayer.prepare()
-            audioPlayer.playWhenReady = false
-            val displayName = queryDisplayName(uri) ?: uri.lastPathSegment ?: "Archivo de música"
-            trackInfo.text = "Seleccionado: $displayName\nPreparando audio…"
-            playButton.isEnabled = true
-            eqInfo.text = "Preparando la sesión de audio real…"
-            updatePlaybackButton()
-        } catch (e: Exception) {
-            trackInfo.text = "No se pudo abrir el archivo: ${e.localizedMessage ?: "error desconocido"}"
-            playButton.isEnabled = false
-        }
-    }
-
-    private fun queryDisplayName(uri: Uri): String? {
-        return try {
-            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            }
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         } catch (_: Exception) {
-            null
+            musicInfo.text = "Abre Ajustes y busca Acceso a notificaciones para permitir AirPods Ultimate."
         }
     }
 
-    private fun connectEqualizer(sessionId: Int) {
-        if (sessionId <= 0 || isFinishing || isDestroyed) return
-        try {
-            if (equalizer != null) return
-            equalizer = Equalizer(0, sessionId).apply { enabled = true }
-            val bands = equalizer?.numberOfBands ?: 0
-            eqInfo.text = "Ecualizador conectado a la reproducción · $bands bandas. Perfil: $selectedPreset."
-            applyPreset(selectedPreset)
-        } catch (e: Exception) {
-            releaseEqualizer()
-            eqInfo.text = "Este sistema no ofrece un ecualizador compatible para esta sesión de audio."
-        }
+    private fun updateAccessButton() {
+        if (!::accessButton.isInitialized) return
+        accessButton.text = if (hasNotificationAccess()) "Acceso de detección activado" else "Activar detección de música"
     }
 
-    private fun applyPreset(preset: String) {
-        selectedPreset = preset
-        val eq = equalizer
-        if (eq == null) {
-            eqInfo.text = "Elige y prepara una canción primero. Después se podrá aplicar «$preset» si HiOS admite el efecto."
+    private fun refreshMediaSessions() {
+        if (!::musicInfo.isInitialized) return
+        updateAccessButton()
+        if (!hasNotificationAccess()) {
+            musicInfo.text = "Falta permitir el acceso a notificaciones para detectar la música activa."
             return
         }
         try {
-            val range = eq.bandLevelRange
-            val low = range[0].toInt()
-            val high = range[1].toInt()
-            val values = when (preset) {
-                "Bajos" -> intArrayOf(800, 600, 250, 0, -100)
-                "Voces" -> intArrayOf(-200, 100, 550, 650, 250)
-                "Brillante" -> intArrayOf(-200, 0, 150, 500, 750)
-                else -> intArrayOf(0, 0, 0, 0, 0)
-            }
-            for (i in 0 until eq.numberOfBands) {
-                eq.setBandLevel(i.toShort(), values.getOrElse(i) { 0 }.coerceIn(low, high).toShort())
-            }
-            eqInfo.text = "Perfil «$preset» aplicado · ${eq.numberOfBands} bandas activas."
+            val manager = sessionManager ?: (getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager).also { sessionManager = it }
+            manager.addOnActiveSessionsChangedListener(
+                sessionsListener,
+                ComponentName(this, MediaNotificationListener::class.java),
+                Handler(Looper.getMainLooper())
+            )
+            attachControllers(manager.getActiveSessions(ComponentName(this, MediaNotificationListener::class.java)))
+        } catch (_: SecurityException) {
+            musicInfo.text = "Android todavía no concedió el acceso. Actívalo en Ajustes y vuelve a la app."
         } catch (e: Exception) {
-            eqInfo.text = "HiOS rechazó este perfil para la sesión actual."
+            musicInfo.text = "No se pudieron consultar las sesiones multimedia: ${e.localizedMessage ?: "error"}"
         }
     }
 
-    private fun togglePlayback() {
-        val audioPlayer = player ?: return
-        if (audioPlayer.isPlaying) audioPlayer.pause() else audioPlayer.play()
-        updatePlaybackButton()
+    private fun attachControllers(controllers: List<MediaController>) {
+        activeControllers.forEach { old ->
+            try { old.unregisterCallback(controllerCallback) } catch (_: Exception) {}
+        }
+        activeControllers = controllers
+        activeControllers.forEach { controller ->
+            try { controller.registerCallback(controllerCallback, Handler(Looper.getMainLooper())) } catch (_: Exception) {}
+        }
+        showCurrentTrack()
     }
 
-    private fun stopPlayback() {
-        player?.pause()
-        player?.seekTo(0)
-        updatePlaybackButton()
+    private fun showCurrentTrack() {
+        if (!::musicInfo.isInitialized) return
+        val playing = activeControllers.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+        val current = playing ?: activeControllers.firstOrNull {
+            val state = it.playbackState?.state
+            state == PlaybackState.STATE_PAUSED || state == PlaybackState.STATE_BUFFERING
+        }
+        if (current == null) {
+            musicInfo.text = if (activeControllers.isEmpty()) {
+                "No se detecta música activa. Reproduce algo en Spotify, Deezer u otro reproductor compatible."
+            } else {
+                "Hay sesiones multimedia disponibles, pero ninguna informa una canción actual."
+            }
+            return
+        }
+        val metadata = current.metadata
+        val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: "Título no disponible"
+        val artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            ?: metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+            ?: "Artista no disponible"
+        val state = if (current.playbackState?.state == PlaybackState.STATE_PLAYING) "REPRODUCIENDO" else "EN PAUSA"
+        musicInfo.text = "● $state\n$title\n$artist"
     }
 
-    private fun updatePlaybackButton() {
-        if (!::playButton.isInitialized) return
-        val audioPlayer = player
-        playButton.text = if (audioPlayer?.isPlaying == true) "Pausar" else "Reproducir"
-        playButton.isEnabled = audioPlayer != null
+    private fun unregisterMediaSessions() {
+        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) {}
+        activeControllers.forEach { controller ->
+            try { controller.unregisterCallback(controllerCallback) } catch (_: Exception) {}
+        }
+        activeControllers = emptyList()
     }
 
     private fun refreshBluetooth() {
@@ -282,21 +275,6 @@ class MainActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 41) refreshBluetooth()
-    }
-
-    private fun releaseEqualizer() {
-        try {
-            equalizer?.release()
-        } catch (_: Exception) {
-        }
-        equalizer = null
-    }
-
-    override fun onDestroy() {
-        releaseEqualizer()
-        player?.release()
-        player = null
-        super.onDestroy()
     }
 
     private fun card() = LinearLayout(this).apply {
