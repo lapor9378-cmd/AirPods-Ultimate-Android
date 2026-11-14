@@ -2,22 +2,18 @@ package com.airpodsultimate
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
-import android.media.MediaMetadata
-import android.media.session.MediaController
-import android.media.session.MediaSessionManager
-import android.media.session.PlaybackState
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -32,19 +28,45 @@ class MainActivity : ComponentActivity() {
     private val surface = Color.rgb(24, 32, 48)
     private val accent = Color.rgb(133, 160, 255)
     private val secondary = Color.rgb(167, 179, 199)
-    private lateinit var status: TextView
-    private lateinit var devices: TextView
-    private lateinit var musicInfo: TextView
-    private lateinit var accessButton: Button
-    private var sessionManager: MediaSessionManager? = null
-    private var activeControllers: List<MediaController> = emptyList()
-    private val controllerCallback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) = showCurrentTrack()
-        override fun onPlaybackStateChanged(state: PlaybackState?) = showCurrentTrack()
-        override fun onSessionDestroyed() = refreshMediaSessions()
+
+    private lateinit var scanStatus: TextView
+    private lateinit var leftValue: TextView
+    private lateinit var rightValue: TextView
+    private lateinit var caseValue: TextView
+    private lateinit var leftStatus: TextView
+    private lateinit var rightStatus: TextView
+    private lateinit var caseStatus: TextView
+    private lateinit var updated: TextView
+    private lateinit var scanButton: Button
+
+    private var latest: AirPodsBattery? = null
+    private var scanning = false
+    private val handler = Handler(Looper.getMainLooper())
+    private val refreshClock = object : Runnable {
+        override fun run() {
+            updateFreshness()
+            if (scanning) handler.postDelayed(this, 1000)
+        }
     }
-    private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-        attachControllers(controllers.orEmpty())
+
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val payload = result.scanRecord?.getManufacturerSpecificData(AirPodsBattery.APPLE_COMPANY_ID) ?: return
+            val reading = AirPodsBattery.decode(payload) ?: return
+            if (reading.modelId != AirPodsBattery.AIRPODS_PRO_3_MODEL) return
+            runOnUiThread {
+                latest = reading.copy(rssi = result.rssi, seenAt = System.currentTimeMillis())
+                showBattery(latest!!)
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            runOnUiThread {
+                scanning = false
+                scanStatus.text = "Android no pudo iniciar el escaneo Bluetooth (código " + errorCode + ")."
+                scanButton.text = "Volver a intentar"
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,234 +74,220 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = background
         window.navigationBarColor = background
         render()
-        refreshBluetooth()
-        requestBluetoothPermission()
-        sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-    }
-
-    override fun onStart() {
-        super.onStart()
-        refreshMediaSessions()
-    }
-
-    override fun onStop() {
-        unregisterMediaSessions()
-        super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::accessButton.isInitialized) updateAccessButton()
-        if (::musicInfo.isInitialized) refreshMediaSessions()
+        beginScanningIfAllowed()
+    }
+
+    override fun onPause() {
+        stopScanning()
+        super.onPause()
     }
 
     private fun render() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(30), dp(20), dp(32))
+            setPadding(dp(20), dp(28), dp(20), dp(30))
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(this@MainActivity.background)
+            setBackgroundColor(background)
             addView(content)
         }
         setContentView(scroll)
 
         content.addView(text("AIRPODS ULTIMATE", 12, accent, true))
-        content.addView(text("Audio, bajo control.", 29, Color.WHITE, true))
-        content.addView(text("Herramientas Bluetooth y sonido para Android", 14, secondary))
+        content.addView(text("Batería", 32, Color.WHITE, true))
+        content.addView(text("Niveles de carga de tus AirPods Pro 3", 14, secondary))
         content.addView(space(22))
 
-        val diagnostic = card()
-        diagnostic.addView(text("DIAGNÓSTICO", 11, accent, true))
-        status = text("Preparando diagnóstico…", 14, Color.WHITE)
-        diagnostic.addView(status)
-        content.addView(diagnostic)
+        val statusCard = card()
+        statusCard.addView(text("ESTADO DE CONEXIÓN", 11, accent, true))
+        scanStatus = text("Preparando Bluetooth…", 14, Color.WHITE)
+        statusCard.addView(scanStatus)
+        scanButton = button("Buscar AirPods") { requestScanPermissions() }
+        statusCard.addView(scanButton)
+        content.addView(statusCard)
 
         content.addView(space(14))
-        val deviceCard = card()
-        deviceCard.addView(text("DISPOSITIVOS VINCULADOS", 11, accent, true))
-        devices = text("Consultando Bluetooth…", 14, Color.WHITE)
-        deviceCard.addView(devices)
-        deviceCard.addView(button("Actualizar dispositivos") { refreshBluetooth() })
-        content.addView(deviceCard)
+        content.addView(batteryCard("AUDÍFONO IZQUIERDO", true, 0))
+        content.addView(space(10))
+        content.addView(batteryCard("AUDÍFONO DERECHO", true, 1))
+        content.addView(space(10))
+        content.addView(batteryCard("ESTUCHE DE CARGA", false, 2))
 
         content.addView(space(14))
-        val musicCard = card()
-        musicCard.addView(text("REPRODUCCIÓN ACTUAL", 11, accent, true))
-        musicInfo = text("Buscando música que se esté reproduciendo en el teléfono…", 15, Color.WHITE)
-        musicCard.addView(musicInfo)
-        accessButton = button("Activar detección de música") { openNotificationAccess() }
-        musicCard.addView(accessButton)
-        musicCard.addView(button("Actualizar música") { refreshMediaSessions() })
-        musicCard.addView(text(
-            "Detecta sesiones multimedia de aplicaciones de streaming y reproductores compatibles. No necesitas elegir ni descargar canciones.",
-            12, secondary
-        ))
-        content.addView(musicCard)
-
-        content.addView(space(14))
-        val audioCard = card()
-        audioCard.addView(text("ECUALIZADOR", 11, accent, true))
-        audioCard.addView(text(
-            "La detección de Spotify, Deezer y otros servicios funciona por las sesiones multimedia de Android. Aplicar efectos directamente al audio de otra aplicación depende del sistema y no está permitido por todos los teléfonos. Esta versión no fingirá que un perfil se aplicó si Android no lo permite.",
+        val note = card()
+        note.addView(text("LECTURAS REALES", 11, accent, true))
+        note.addView(text(
+            "Los porcentajes se leen de los anuncios Bluetooth de los AirPods. La lectura puede venir en pasos de 10%. Al cerrar el estuche, su batería puede dejar de anunciarse y se conserva la última lectura recibida.",
             13, secondary
         ))
-        content.addView(audioCard)
-
-        content.addView(space(14))
-        val limits = card()
-        limits.addView(text("COMPATIBILIDAD", 11, accent, true))
-        limits.addView(text(
-            "La información disponible depende de cada reproductor: título, artista, carátula y estado pueden variar. La app no graba ni escucha el audio.",
-            13, secondary
-        ))
-        content.addView(limits)
+        updated = text("Todavía no se ha recibido una lectura.", 12, secondary)
+        note.addView(updated)
+        content.addView(note)
         content.addView(space(18))
-        content.addView(text("Versión 0.3.0", 11, secondary))
-        updateAccessButton()
+        content.addView(text("Versión 0.4.0", 11, secondary))
+        showBattery(null)
     }
 
-    private fun hasNotificationAccess(): Boolean {
-        val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false
-        return enabled.split(":").any { ComponentName.unflattenFromString(it)?.packageName == packageName }
-    }
-
-    private fun openNotificationAccess() {
-        try {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-        } catch (_: Exception) {
-            musicInfo.text = "Abre Ajustes y busca Acceso a notificaciones para permitir AirPods Ultimate."
+    private fun batteryCard(title: String, earbud: Boolean, index: Int): LinearLayout {
+        val panel = card()
+        panel.addView(text(title, 11, accent, true))
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
+        val value = text("--%", 34, Color.WHITE, true)
+        row.addView(value, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(text(if (earbud) "◉" else "▣", 25, secondary, true))
+        panel.addView(row)
+        val state = text("Esperando señal…", 12, secondary)
+        panel.addView(state)
+        when (index) {
+            0 -> { leftValue = value; leftStatus = state }
+            1 -> { rightValue = value; rightStatus = state }
+            else -> { caseValue = value; caseStatus = state }
+        }
+        return panel
     }
 
-    private fun updateAccessButton() {
-        if (!::accessButton.isInitialized) return
-        accessButton.text = if (hasNotificationAccess()) "Acceso de detección activado" else "Activar detección de música"
-    }
-
-    private fun refreshMediaSessions() {
-        if (!::musicInfo.isInitialized) return
-        updateAccessButton()
-        if (!hasNotificationAccess()) {
-            musicInfo.text = "Falta permitir el acceso a notificaciones para detectar la música activa."
+    private fun showBattery(data: AirPodsBattery?) {
+        if (!::leftValue.isInitialized) return
+        if (data == null) {
+            leftValue.text = "--%"
+            rightValue.text = "--%"
+            caseValue.text = "--%"
+            leftStatus.text = "Sin lectura"
+            rightStatus.text = "Sin lectura"
+            caseStatus.text = "Sin lectura"
             return
         }
+        leftValue.text = data.left.percent?.let { it.toString() + "%" } ?: "--%"
+        rightValue.text = data.right.percent?.let { it.toString() + "%" } ?: "--%"
+        caseValue.text = data.case.percent?.let { it.toString() + "%" } ?: "--%"
+        leftStatus.text = chargeText(data.left)
+        rightStatus.text = chargeText(data.right)
+        caseStatus.text = chargeText(data.case)
+        scanStatus.text = "AirPods Pro 3 detectados · señal Bluetooth " + data.rssi + " dBm"
+        scanButton.text = "Buscando automáticamente"
+        updated.text = "Última lectura: ahora. Los valores se actualizan al recibir otra señal."
+    }
+
+    private fun chargeText(part: BatteryPart): String = when {
+        part.percent == null -> "Nivel no anunciado"
+        part.charging -> "Cargando"
+        else -> "No está cargando"
+    }
+
+    private fun updateFreshness() {
+        val data = latest ?: return
+        val seconds = ((System.currentTimeMillis() - data.seenAt) / 1000).coerceAtLeast(0)
+        updated.text = if (seconds < 3) {
+            "Última lectura: ahora."
+        } else {
+            "Última lectura hace " + seconds + " s. El estuche puede dejar de emitir al cerrar la tapa."
+        }
+    }
+
+    private fun requestScanPermissions() {
+        val needed = if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        val missing = needed.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 42)
+        } else {
+            startScanning()
+        }
+    }
+
+    private fun beginScanningIfAllowed() {
+        if (!::scanStatus.isInitialized) return
+        val needed = if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (needed.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
+            startScanning()
+        } else {
+            scanStatus.text = "Concede el permiso Bluetooth para leer la batería de los AirPods."
+            scanButton.text = "Conceder permiso Bluetooth"
+        }
+    }
+
+    @Suppress("MissingPermission")
+    private fun startScanning() {
         try {
-            val manager = sessionManager ?: (getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager).also { sessionManager = it }
-            manager.addOnActiveSessionsChangedListener(
-                sessionsListener,
-                ComponentName(this, MediaNotificationListener::class.java),
-                Handler(Looper.getMainLooper())
-            )
-            attachControllers(manager.getActiveSessions(ComponentName(this, MediaNotificationListener::class.java)))
-        } catch (_: SecurityException) {
-            musicInfo.text = "Android todavía no concedió el acceso. Actívalo en Ajustes y vuelve a la app."
-        } catch (e: Exception) {
-            musicInfo.text = "No se pudieron consultar las sesiones multimedia: ${e.localizedMessage ?: "error"}"
-        }
-    }
-
-    private fun attachControllers(controllers: List<MediaController>) {
-        activeControllers.forEach { old ->
-            try { old.unregisterCallback(controllerCallback) } catch (_: Exception) {}
-        }
-        activeControllers = controllers
-        activeControllers.forEach { controller ->
-            try { controller.registerCallback(controllerCallback, Handler(Looper.getMainLooper())) } catch (_: Exception) {}
-        }
-        showCurrentTrack()
-    }
-
-    private fun showCurrentTrack() {
-        if (!::musicInfo.isInitialized) return
-        val playing = activeControllers.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-        val current = playing ?: activeControllers.firstOrNull {
-            val state = it.playbackState?.state
-            state == PlaybackState.STATE_PAUSED || state == PlaybackState.STATE_BUFFERING
-        }
-        if (current == null) {
-            musicInfo.text = if (activeControllers.isEmpty()) {
-                "No se detecta música activa. Reproduce algo en Spotify, Deezer u otro reproductor compatible."
-            } else {
-                "Hay sesiones multimedia disponibles, pero ninguna informa una canción actual."
-            }
-            return
-        }
-        val metadata = current.metadata
-        val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: "Título no disponible"
-        val artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
-            ?: metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
-            ?: "Artista no disponible"
-        val state = if (current.playbackState?.state == PlaybackState.STATE_PLAYING) "REPRODUCIENDO" else "EN PAUSA"
-        musicInfo.text = "● $state\n$title\n$artist"
-    }
-
-    private fun unregisterMediaSessions() {
-        try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) {}
-        activeControllers.forEach { controller ->
-            try { controller.unregisterCallback(controllerCallback) } catch (_: Exception) {}
-        }
-        activeControllers = emptyList()
-    }
-
-    private fun refreshBluetooth() {
-        try {
-            val manager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
             val adapter = manager.adapter
-            if (adapter == null) {
-                devices.text = "El teléfono no informa de un adaptador Bluetooth."
-                status.text = "Bluetooth no disponible."
+            if (adapter == null || !adapter.isEnabled) {
+                scanStatus.text = "Activa Bluetooth para buscar tus AirPods."
+                scanButton.text = "Revisar Bluetooth"
                 return
             }
-            if (Build.VERSION.SDK_INT >= 31 &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                devices.text = "Concede el permiso Bluetooth para consultar dispositivos vinculados."
-                status.text = "Permiso Bluetooth pendiente."
+            val scanner = adapter.bluetoothLeScanner
+            if (scanner == null) {
+                scanStatus.text = "Este teléfono no ofrece escaneo Bluetooth LE."
                 return
             }
-            if (!adapter.isEnabled) {
-                devices.text = "Bluetooth está apagado. Actívalo en Ajustes."
-                status.text = "Adaptador detectado · Bluetooth apagado."
-                return
-            }
-            val paired = adapter.bondedDevices.orEmpty()
-            devices.text = if (paired.isEmpty()) {
-                "No hay dispositivos vinculados. Empareja tus AirPods desde los ajustes Bluetooth."
-            } else paired.joinToString("\n\n") { device ->
-                val name = try { device.name ?: "Dispositivo Bluetooth" } catch (_: SecurityException) { "Nombre no disponible" }
-                val kind = when (device.type) {
-                    1 -> "Bluetooth clásico"
-                    2 -> "Bluetooth LE"
-                    3 -> "Bluetooth clásico + LE"
-                    else -> "Tipo desconocido"
-                }
-                "• $name\n  $kind · Vinculado"
-            }
-            status.text = "Bluetooth activo · ${paired.size} dispositivo(s) vinculados."
+            if (scanning) return
+            val filter = ScanFilter.Builder()
+                .setManufacturerData(
+                    AirPodsBattery.APPLE_COMPANY_ID,
+                    byteArrayOf(AirPodsBattery.PROXIMITY_TYPE.toByte()),
+                    byteArrayOf(0xFF.toByte())
+                )
+                .build()
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+            scanner.startScan(listOf(filter), settings, scanCallback)
+            scanning = true
+            scanStatus.text = "Buscando tus AirPods Pro 3… Abre la tapa del estuche para actualizar sus niveles."
+            scanButton.text = "Escaneo activo"
+            handler.removeCallbacks(refreshClock)
+            handler.post(refreshClock)
         } catch (_: SecurityException) {
-            devices.text = "Android bloqueó la consulta. Revisa el permiso Bluetooth."
-            status.text = "Acceso Bluetooth denegado."
+            scanStatus.text = "Android bloqueó el escaneo. Revisa los permisos Bluetooth."
+            scanButton.text = "Conceder permiso Bluetooth"
         } catch (e: Exception) {
-            devices.text = "No se pudo consultar: ${e.localizedMessage ?: "error desconocido"}"
-            status.text = "Diagnóstico incompleto."
+            scanStatus.text = "No se pudo iniciar el escaneo: " + (e.localizedMessage ?: "error")
         }
     }
 
-    private fun requestBluetoothPermission() {
-        if (Build.VERSION.SDK_INT >= 31 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 41)
+    @Suppress("MissingPermission")
+    private fun stopScanning() {
+        if (!scanning) return
+        try {
+            val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+            manager.adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        } catch (_: Exception) {
         }
+        scanning = false
+        handler.removeCallbacks(refreshClock)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 41) refreshBluetooth()
+        if (requestCode == 42) {
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                startScanning()
+            } else {
+                scanStatus.text = "Permiso denegado. Sin él Android no permite leer los anuncios Bluetooth."
+            }
+        }
     }
 
     private fun card() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(16), dp(16), dp(16), dp(16))
+        setPadding(dp(16), dp(15), dp(16), dp(15))
         setBackgroundColor(surface)
     }
 
@@ -288,7 +296,7 @@ class MainActivity : ComponentActivity() {
         textSize = size.toFloat()
         setTextColor(color)
         if (bold) typeface = Typeface.DEFAULT_BOLD
-        setPadding(0, dp(4), 0, dp(8))
+        setPadding(0, dp(3), 0, dp(7))
     }
 
     private fun button(value: String, action: () -> Unit) = Button(this).apply {
