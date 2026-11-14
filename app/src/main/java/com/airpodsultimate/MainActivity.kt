@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var caseValue: TextView
     private lateinit var leftStatus: TextView
     private lateinit var rightStatus: TextView
+    private lateinit var leftPosition: TextView
+    private lateinit var rightPosition: TextView
     private lateinit var caseStatus: TextView
     private lateinit var updated: TextView
     private lateinit var scanButton: Button
@@ -145,6 +147,11 @@ class MainActivity : ComponentActivity() {
         panel.addView(row)
         val state = text("Esperando señal…", 12, secondary)
         panel.addView(state)
+        if (earbud) {
+            val position = text("● Estado no detectado", 13, secondary, true)
+            panel.addView(position)
+            if (index == 0) leftPosition = position else rightPosition = position
+        }
         when (index) {
             0 -> { leftValue = value; leftStatus = state }
             1 -> { rightValue = value; rightStatus = state }
@@ -161,6 +168,8 @@ class MainActivity : ComponentActivity() {
             caseValue.text = "--%"
             leftStatus.text = "Sin lectura"
             rightStatus.text = "Sin lectura"
+            setPosition(leftPosition, null)
+            setPosition(rightPosition, null)
             caseStatus.text = "Sin lectura"
             return
         }
@@ -169,10 +178,20 @@ class MainActivity : ComponentActivity() {
         caseValue.text = data.case.percent?.let { it.toString() + "%" } ?: "--%"
         leftStatus.text = chargeText(data.left)
         rightStatus.text = chargeText(data.right)
+        setPosition(leftPosition, data.leftInCase)
+        setPosition(rightPosition, data.rightInCase)
         caseStatus.text = chargeText(data.case)
         scanStatus.text = "AirPods Pro 3 detectados · señal Bluetooth " + data.rssi + " dBm"
         scanButton.text = "Buscando automáticamente"
         updated.text = "Última lectura: ahora. Los valores se actualizan al recibir otra señal."
+    }
+
+    private fun setPosition(view: TextView, inCase: Boolean?) {
+        when (inCase) {
+            true -> { view.text = "● En caja"; view.setTextColor(Color.rgb(255, 183, 77)) }
+            false -> { view.text = "● Fuera del estuche"; view.setTextColor(Color.rgb(76, 220, 140)) }
+            null -> { view.text = "● Estado no detectado"; view.setTextColor(secondary) }
+        }
     }
 
     private fun chargeText(part: BatteryPart): String = when {
